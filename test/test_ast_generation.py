@@ -24,6 +24,10 @@ TEST_CASES = [
         async for i in a:
             pass
      '''),
+    ('attribute_call', 'a.b()'),
+    ('attribute_multiple_names', 'abcd.efg.hij'),
+    ('attribute_simple', 'a.b'),
+    ('attributes_subscript', 'a.b[0]'),
     ('augmented_assignment', 'x += 42'),
     ('binop_add', '1 + 1'),
     ('binop_add_multiple', '1 + 1 + 1 + 1'),
@@ -67,6 +71,14 @@ TEST_CASES = [
         class C(A, x=2, *[B, C], y=3):
             pass
      '''),
+    ('call_attribute', 'f().b'),
+    ('call_genexp', 'f(i for i in a)'),
+    ('call_mixed_args', 'f(a, b, *c, **d)'),
+    ('call_mixed_args_named', 'f(a, b, *c, d=4, **v)'),
+    ('call_one_arg', 'f(a)'),
+    ('call_posarg_genexp', 'f(a, (i for i in a))'),
+    ('call_simple', 'f()'),
+    ('call_subscript', 'f()[0]'),
     ('comp', 'a == b'),
     ('comp_multiple', 'a == b == c'),
     ('decorator',
@@ -203,6 +215,9 @@ TEST_CASES = [
         def f(a, b=2, /, c=3, *e, f, **g):
             pass
      '''),
+    ('multipart_string_bytes', 'b"Hola" b"Hello" b"Bye"'),
+    ('multipart_string_triple', '"""Something here""" "and now"'),
+    ('multipart_string_different_prefixes', 'u"Something" "Other thing" r"last thing"'),
     ('multiple_assignments', 'x = y = z = 42'),
     ('multiple_assignments_with_yield', 'x = y = z = yield 42'),
     ('multiple_pass',
@@ -242,6 +257,7 @@ TEST_CASES = [
         def f(a, b=0, /, c=2):
             pass
      '''),
+    ('primary_mixed', 'a.b.c().d[0]'),
     ('raise', 'raise'),
     ('raise_ellipsis', 'raise ...'),
     ('raise_expr', 'raise a'),
@@ -253,6 +269,14 @@ TEST_CASES = [
     ('set_trailing_comma', '{1, 2, 3,}'),
     ('simple_assignment', 'x = 42'),
     ('simple_assignment_with_yield', 'x = yield 42'),
+    ('subscript_attribute', 'a[0].b'),
+    ('subscript_call', 'a[b]()'),
+    ('subscript_multiple_slices', 'a[0:a:2, 1]'),
+    ('subscript_simple', 'a[0]'),
+    ('subscript_single_element_tuple', 'a[0,]'),
+    ('subscript_trailing_comma', 'a[0, 1, 2,]'),
+    ('subscript_tuple', 'a[0, 1, 2]'),
+    ('subscript_whole_slice', 'a[0+1:b:c]'),
     ('try_except',
      '''
         try:
@@ -403,7 +427,16 @@ def parser_extension(tmp_path_factory: Any) -> Any:
 
 @pytest.mark.parametrize("source", TEST_SOURCES, ids=TEST_IDS)
 def test_ast_generation_on_source_files(parser_extension: Any, source: str) -> None:
-    print(source)
+    actual_ast = parser_extension.parse_string(source)
+    expected_ast = ast.parse(source)
+    assert ast.dump(actual_ast, include_attributes=True) == ast.dump(
+        expected_ast, include_attributes=True
+    ), f"Wrong AST generation for source: {source}"
+
+
+@pytest.mark.xfail
+def test_ast_generation_for_fstrings(parser_extension: Any) -> None:
+    source = "f'{val}'"
     actual_ast = parser_extension.parse_string(source)
     expected_ast = ast.parse(source)
     assert ast.dump(actual_ast, include_attributes=True) == ast.dump(
