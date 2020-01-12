@@ -31,7 +31,7 @@ assignment:
     | a=(z=star_targets '=' { z })+ b=(yield_expr | expressions) {
          _Py_Assign(a, b, NULL, EXTRA) }
     | a=target b=augassign c=(yield_expr | expressions) {
-         _Py_AugAssign(set_expr_context(p, a, Store), b->kind, c, EXTRA) }
+         _Py_AugAssign(a, b->kind, c, EXTRA) }
 
 augassign[AugOperator*]:
     | '+=' {augoperator(p, Add)}
@@ -79,7 +79,7 @@ import_from_targets[asdl_seq*]:
 import_from_as_names[asdl_seq*]:
     | a=','.import_from_as_name+ [','] { a }
 import_from_as_name[alias_ty]:
-    | a=NAME b=['as' z=NAME { z }] { _Py_alias(((expr_ty) a)->v.Name.id,
+    | a=NAME b=['as' z=NAME { z }] { _Py_alias(a->v.Name.id,
                                                (b) ? ((expr_ty) b)->v.Name.id : NULL,
                                                p->arena) }
 dotted_as_names[asdl_seq*]:
@@ -119,7 +119,7 @@ with_stmt[stmt_ty]:
     | 'with' a=','.with_item+ ':' b=block {
         _Py_With(a, b, NULL, EXTRA) }
 with_item[withitem_ty]:
-    | e=expression o=['as' t=target { t }] { _Py_withitem(e, set_expr_context(p, o, Store), p->arena) }
+    | e=expression o=['as' t=target { t }] { _Py_withitem(e, o, p->arena) }
 
 try_stmt[stmt_ty]:
     | 'try' ':' b=block f=finally_block { _Py_Try(b, NULL, NULL, f, EXTRA) }
@@ -144,11 +144,11 @@ function_def[stmt_ty]:
 
 function_def_raw[stmt_ty]:
     | ASYNC 'def' n=NAME '(' params=[parameters] ')' a=['->' z=annotation { z }] ':' b=block {
-        _Py_AsyncFunctionDef(((expr_ty) n)->v.Name.id,
+        _Py_AsyncFunctionDef(n->v.Name.id,
                              (params) ? params : empty_arguments(p),
                              b, NULL, a, NULL, EXTRA) }
     | 'def' n=NAME '(' params=[parameters] ')' a=['->' z=annotation { z }] ':' b=block {
-        _Py_FunctionDef(((expr_ty) n)->v.Name.id,
+        _Py_FunctionDef(n->v.Name.id,
                         (params) ? params : empty_arguments(p),
                         b, NULL, a, NULL, EXTRA) }
 
@@ -177,7 +177,7 @@ name_with_default[NameDefaultPair*]:
     | n=plain_name '=' e=expression { name_default_pair(p, n, e) }
 plain_names[asdl_seq*]: a=','.(plain_name !'=')+ { a }
 plain_name[arg_ty]:
-    | a=NAME b=[':' z=annotation { z }] { _Py_arg(((expr_ty) a)->v.Name.id, b, NULL, EXTRA) }
+    | a=NAME b=[':' z=annotation { z }] { _Py_arg(a->v.Name.id, b, NULL, EXTRA) }
 kwds[arg_ty]:
     | '**' a=plain_name { a }
 annotation[expr_ty]: expression
@@ -189,7 +189,7 @@ class_def[stmt_ty]:
     | class_def_raw
 class_def_raw[stmt_ty]:
     | 'class' a=NAME b=['(' z=[arguments] ')' { z }] ':' c=block {
-        _Py_ClassDef(((expr_ty) a)->v.Name.id,
+        _Py_ClassDef(a->v.Name.id,
                      (b) ? ((expr_ty) b)->v.Call.args : NULL,
                      (b) ? ((expr_ty) b)->v.Call.keywords : NULL,
                      c, NULL, EXTRA) }
@@ -245,7 +245,7 @@ lambda_names_with_default[asdl_seq*]: a=','.lambda_name_with_default+ { a }
 lambda_name_with_default[NameDefaultPair*]:
     | n=lambda_plain_name '=' e=expression { name_default_pair(p, n, e) }
 lambda_plain_names[asdl_seq*]: a=','.(lambda_plain_name !'=')+ { a }
-lambda_plain_name[arg_ty]: a=NAME { _Py_arg(((expr_ty) a)->v.Name.id, NULL, NULL, EXTRA) }
+lambda_plain_name[arg_ty]: a=NAME { _Py_arg(a->v.Name.id, NULL, NULL, EXTRA) }
 lambda_kwds[arg_ty]: '**' a=lambda_plain_name { a }
 
 disjunction[expr_ty]:
@@ -326,7 +326,7 @@ await_primary[expr_ty]:
     | AWAIT a=primary { _Py_Await(a, EXTRA) }
     | primary
 primary[expr_ty]:
-    | a=primary '.' b=NAME { _Py_Attribute(a, ((expr_ty) b)->v.Name.id, Load, EXTRA) }
+    | a=primary '.' b=NAME { _Py_Attribute(a, b->v.Name.id, Load, EXTRA) }
     | a=primary b=slicing { _Py_Subscript(a, b, Load, EXTRA) }
     | a=primary b=genexp { _Py_Call(a, singleton_seq(p, b), NULL, EXTRA) }
     | a=primary '(' b=[arguments] ')' {
@@ -415,7 +415,7 @@ starred_expression[expr_ty]:
     | '*' a=expression { _Py_Starred(a, Load, EXTRA) }
 kwarg[KeywordOrStarred*]:
     | a=NAME '=' b=expression {
-        keyword_or_starred(p, _Py_keyword(((expr_ty) a)->v.Name.id, b, p->arena), 1) }
+        keyword_or_starred(p, _Py_keyword(a->v.Name.id, b, p->arena), 1) }
     | a=starred_expression { keyword_or_starred(p, a, 0) }
     | '**' a=expression { keyword_or_starred(p, _Py_keyword(NULL, a, p->arena), 1) }
 
@@ -427,11 +427,25 @@ star_target: '*' bitwise_or | atom t_tail+ | a=star_atom t_tail* { a }
 star_atom: a=NAME { set_expr_context(p, a, Store) } | '(' [star_targets] ')' | '[' [star_targets] ']'
 
 targets[asdl_seq*]: a=','.target+ [','] { a }
-target[expr_ty]: atom t_tail+ | a=t_atom t_tail* { a }
+target[expr_ty]:
+    | a=t_primary '.' b=NAME !t_lookahead { _Py_Attribute(a, b->v.Name.id, Store, EXTRA) }
+    | a=t_primary b=slicing !t_lookahead { _Py_Subscript(a, b, Store, EXTRA) }
+    | t_atom
+t_primary[expr_ty]:
+    | a=t_primary '.' b=NAME &t_lookahead { _Py_Attribute(a, b->v.Name.id, Load, EXTRA) }
+    | a=t_primary b=slicing &t_lookahead { _Py_Subscript(a, b, Load, EXTRA) }
+    | a=t_primary b=genexp  &t_lookahead { _Py_Call(a, singleton_seq(p, b), NULL, EXTRA) }
+    | a=t_primary '(' b=[arguments] ')' &t_lookahead {
+        _Py_Call(a,
+                 (b) ? ((expr_ty) b)->v.Call.args : NULL,
+                 (b) ? ((expr_ty) b)->v.Call.keywords : NULL,
+                 EXTRA) }
+    | a=atom &t_lookahead { a }
+t_lookahead: '(' | '[' | '.'
 t_atom[expr_ty]:
-    | NAME
-    | '(' b=[targets] ')' { _Py_Tuple(b, Load, EXTRA) }
-    | '[' b=[targets] ']' { _Py_List(b, Load, EXTRA) }
+    | a=NAME { set_expr_context(p, a, Store) }
+    | '(' b=[targets] ')' { _Py_Tuple(b, Store, EXTRA) }
+    | '[' b=[targets] ']' { _Py_List(b, Store, EXTRA) }
 
 t_tail: call_tail* (attr_tail | index_tail)
 call_tail: '(' ~ [arguments] ')'
