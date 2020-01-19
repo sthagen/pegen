@@ -135,12 +135,17 @@ update_memo(Parser *p, int mark, int type, void *node)
 void *
 CONSTRUCTOR(Parser *p, ...)
 {
+    static void *cache = NULL;
+
+    if (cache != NULL)
+        return cache;
 
     PyObject *id = _create_dummy_identifier(p);
     if (!id) {
         return NULL;
     }
-    return Name(id, Load, 1, 0, 1, 0,p->arena);
+    cache = Name(id, Load, 1, 0, 1, 0, p->arena);
+    return cache;
 }
 
 int
@@ -463,8 +468,10 @@ run_parser(struct tok_state* tok, void *(start_rule_func)(Parser *), int mode)
         goto exit;
     }
 
-    if (mode == 1) {
-        result =  PyAST_mod2obj(res);
+    if (mode == 2) {
+        result = (PyObject *)PyAST_CompileObject(res, tok->filename, NULL, -1, p->arena);
+    } else if (mode == 1) {
+        result = PyAST_mod2obj(res);
     } else {
         result = Py_None;
         Py_INCREF(result);

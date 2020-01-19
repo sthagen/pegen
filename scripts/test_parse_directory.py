@@ -36,6 +36,9 @@ argparser.add_argument(
 argparser.add_argument(
     "-v", "--verbose", action="store_true", help="Display detailed errors for failures"
 )
+argparser.add_argument(
+    "--skip-actions", action="store_true", help="Suppress code emission for rule actions",
+)
 argparser.add_argument("-t", "--tree", action="count", help="Compare parse tree to official AST")
 
 
@@ -121,7 +124,12 @@ def main() -> None:
             sys.exit(1)
 
         try:
-            build_parser_and_generator(grammar_file, "pegen/parse.c", True)
+            build_parser_and_generator(
+                grammar_file,
+                "pegen/parse.c",
+                compile_extension=True,
+                skip_actions=args.skip_actions,
+            )
         except Exception as err:
             print(
                 f"{FAIL}The following error occurred when generating the parser. Please check your grammar file.\n{ENDC}",
@@ -160,7 +168,7 @@ def main() -> None:
 
         if not should_exclude_file:
             try:
-                tree = parse.parse_file(file)
+                tree = parse.parse_file(file, mode=1)
                 if args.tree:
                     trees[file] = tree
                 if not args.short:
