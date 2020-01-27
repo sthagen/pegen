@@ -1,6 +1,6 @@
-PYTHON ?= `/usr/bin/which python3.8`
-CPYTHON ?= "./cpython"
-MYPY ?= `/usr/bin/which mypy`
+PYTHON ?= python3.8
+CPYTHON ?= cpython
+MYPY ?= mypy
 
 GRAMMAR = data/simpy.gram
 TESTFILE = data/cprog.txt
@@ -62,7 +62,7 @@ time_stdlib_compile:
 time_stdlib_parse:
 	/usr/bin/time -l $(PYTHON) -c "import ast; ast.parse(open('$(TIMEFILE)').read())"
 
-simpy:
+simpy: clean-cpython
 	$(PYTHON) scripts/test_parse_directory.py \
 		-g data/simpy.gram \
 		-d $(TESTDIR) \
@@ -71,7 +71,7 @@ simpy:
 		--exclude "*/failset/**" \
 		--exclude "*/failset/**/*"
 
-simpy_cpython:
+simpy_cpython: $(CPYTHON)
 	$(PYTHON) scripts/test_parse_directory.py \
 		-g data/simpy.gram \
 		-d $(CPYTHON) \
@@ -81,11 +81,46 @@ simpy_cpython:
 		--exclude "*/bad*" \
 		--exclude "*/lib2to3/tests/data/*"
 
+# To create the tarball, go to the parent of a clean cpython checkout,
+# and run `tar cf cpython-lib.tgz cpython/Lib`.  (This will include
+# non .py files that aren't needed, but they're harmless.)
+cpython:
+	tar xf data/cpython-lib.tgz
+
+clean-cpython:
+	-rm -rf cpython
+
 mypy: regen-metaparser
 	$(MYPY)  # For list of files, see mypy.ini
 
-black:
+format-python:
 	black pegen tatsu test scripts
+
+bench: cpython
+	$(MAKE) -s simpy_cpython 2>/dev/null
+	$(MAKE) -s simpy_cpython 2>/dev/null
+	$(MAKE) -s simpy_cpython 2>/dev/null
+
+# To install clang-format:
+#    on mac: "brew install clang-format"
+#    on ubuntu: "apt-get install clang-format"
+#    on arch: "pacman -S clang"
+format-c:
+	clang-format pegen/pegen.c -i
+
+# To install clang-tidy:
+#    on mac:
+#       "brew install llvm"
+#       Then, create symlinks to the binaries. For example:
+#       ln -s "$(brew --prefix llvm)/bin/clang-format" "/usr/local/bin/clang-format"
+#       ln -s "$(brew --prefix llvm)/bin/clang-tidy" "/usr/local/bin/clang-tidy"
+#    on ubuntu: "apt-get install clang-tidy"
+#    on arch: "pacman -S clang"
+clang-tidy:
+	$(eval COMPILE_OPTIONS = $(shell python-config --cflags))
+	clang-tidy pegen/pegen.c -fix-errors -fix -checks="readability-braces-around-statements" -- $(COMPILE_OPTIONS) 1>/dev/null
+
+format: format-python format-c
 
 find_max_nesting:
 	$(PYTHON) scripts/find_max_nesting.py
