@@ -10,7 +10,7 @@ import traceback
 from glob import glob
 from pathlib import PurePath
 
-from typing import List, Optional
+from typing import List, Optional, Any
 
 sys.path.insert(0, ".")
 from pegen.build import build_parser_and_generator
@@ -39,7 +39,9 @@ argparser.add_argument(
 argparser.add_argument(
     "--skip-actions", action="store_true", help="Suppress code emission for rule actions",
 )
-argparser.add_argument("-t", "--tree", action="count", help="Compare parse tree to official AST")
+argparser.add_argument(
+    "-t", "--tree", action="count", help="Compare parse tree to official AST", default=0
+)
 
 
 def report_status(
@@ -78,7 +80,7 @@ def report_status(
 
 def compare_trees(
     actual_tree: ast.AST, file: str, verbose: bool, include_attributes: bool = False,
-) -> None:
+) -> int:
     with open(file) as f:
         expected_tree = ast.parse(f.read())
 
@@ -88,7 +90,7 @@ def compare_trees(
         if verbose:
             print("Tree for {file}:")
             print(show_parse.format_tree(actual_tree, include_attributes))
-        return
+        return 0
 
     print(f"Diffing ASTs for {file} ...")
 
@@ -106,30 +108,36 @@ def compare_trees(
     for line in diff:
         print(line)
 
+    return 1
 
-def main() -> None:
-    args = argparser.parse_args()
-    directory = args.directory
-    grammar_file = args.grammar_file
-    verbose = args.verbose
-    excluded_files = args.exclude
 
+def parse_directory(
+    directory: str,
+    grammar_file: str,
+    verbose: bool,
+    excluded_files: List[str],
+    skip_actions: bool,
+    tree_arg: int,
+    short: bool,
+    extension: Any,
+) -> int:
     if not directory:
         print("You must specify a directory of files to test.", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     if grammar_file:
         if not os.path.exists(grammar_file):
             print(f"The specified grammar file, {grammar_file}, does not exist.", file=sys.stderr)
-            sys.exit(1)
+            return 1
 
         try:
-            build_parser_and_generator(
-                grammar_file,
-                "pegen/parse.c",
-                compile_extension=True,
-                skip_actions=args.skip_actions,
-            )
+            if not extension:
+                build_parser_and_generator(
+                    grammar_file,
+                    "pegen/parse.c",
+                    compile_extension=True,
+                    skip_actions=skip_actions,
+                )
         except Exception as err:
             print(
                 f"{FAIL}The following error occurred when generating the parser. Please check your grammar file.\n{ENDC}",
@@ -137,7 +145,7 @@ def main() -> None:
             )
             traceback.print_exception(err.__class__, err, None)
 
-            sys.exit(1)
+            return 1
 
     else:
         print("A grammar file was not provided - attempting to use existing file...\n")
@@ -149,7 +157,7 @@ def main() -> None:
             "An existing parser was not found. Please run `make` or specify a grammar file with the `-g` flag.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # For a given directory, traverse files and attempt to parse each one
     # - Output success/failure for each file
@@ -169,13 +177,13 @@ def main() -> None:
         if not should_exclude_file:
             try:
                 tree = parse.parse_file(file, mode=1)
-                if args.tree:
+                if tree_arg:
                     trees[file] = tree
-                if not args.short:
+                if not short:
                     report_status(succeeded=True, file=file, verbose=verbose)
             except Exception as error:
                 report_status(
-                    succeeded=False, file=file, verbose=verbose, error=error, short=args.short
+                    succeeded=False, file=file, verbose=verbose, error=error, short=short
                 )
                 errors += 1
             files.append(file)
@@ -202,20 +210,40 @@ def main() -> None:
             f"or {total_bytes / total_seconds :,.0f} bytes/sec.",
         )
 
-    if args.short:
+    if short:
         print_memstats()
 
     if errors:
         print(f"Encountered {errors} failures.", file=sys.stderr)
 
     # Compare trees (the dict is empty unless -t is given)
+    compare_trees_errors = 0
     for file, tree in trees.items():
-        if not args.short:
+        if not short:
             print("Comparing ASTs for", file)
-        compare_trees(tree, file, verbose, args.tree >= 2)
+        if compare_trees(tree, file, verbose, tree_arg >= 2) == 1:
+            compare_trees_errors += 1
 
-    if errors:
-        sys.exit(1)
+    if errors or compare_trees_errors:
+        return 1
+
+    return 0
+
+
+def main() -> None:
+    args = argparser.parse_args()
+    directory = args.directory
+    grammar_file = args.grammar_file
+    verbose = args.verbose
+    excluded_files = args.exclude
+    skip_actions = args.skip_actions
+    tree = args.tree
+    short = args.short
+    sys.exit(
+        parse_directory(
+            directory, grammar_file, verbose, excluded_files, skip_actions, tree, short, None
+        )
+    )
 
 
 if __name__ == "__main__":
