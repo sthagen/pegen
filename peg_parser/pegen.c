@@ -103,6 +103,8 @@ error:
     return -1;
 }
 
+// Enable this if you uncomment any of the comments calling token_name().
+#if 0
 static const char *
 token_name(int type)
 {
@@ -111,6 +113,7 @@ token_name(int type)
     }
     return "<Huh?>";
 }
+#endif
 
 // Here, mark is the start of the node, while p->mark is the end.
 // If node==NULL, they should be the same.
@@ -236,6 +239,43 @@ fill_token(Parser *p)
     return 0;
 }
 
+// Instrumentation to count the effectiveness of memoization.
+// The array counts the number of tokens skipped by memoization,
+// indexed by type.
+
+#define NSTATISTICS 2000
+static long memo_statistics[NSTATISTICS];
+
+void
+clear_memo_statistics()
+{
+    for (int i = 0; i < NSTATISTICS; i++) {
+        memo_statistics[i] = 0;
+    }
+}
+
+PyObject *
+get_memo_statistics()
+{
+    PyObject *ret = PyList_New(NSTATISTICS);
+    if (ret == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < NSTATISTICS; i++) {
+        PyObject *value = PyLong_FromLong(memo_statistics[i]);
+        if (value == NULL) {
+            Py_DECREF(ret);
+            return NULL;
+        }
+        // PyList_SetItem borrows a reference to value.
+        if (PyList_SetItem(ret, i, value) < 0) {
+            Py_DECREF(ret);
+            return NULL;
+        }
+    }
+    return ret;
+}
+
 int  // bool
 is_memoized(Parser *p, int type, void *pres)
 {
@@ -249,6 +289,14 @@ is_memoized(Parser *p, int type, void *pres)
 
     for (Memo *m = t->memo; m != NULL; m = m->next) {
         if (m->type == type) {
+            if (0 <= type && type < NSTATISTICS) {
+                long count = m->mark - p->mark;
+                // A memoized negative result counts for one.
+                if (count <= 0) {
+                    count = 1;
+                }
+                memo_statistics[type] += count;
+            }
             p->mark = m->mark;
             *(void **)(pres) = m->node;
             // fprintf(stderr, "%d < %d: memoized!\n", p->mark, p->fill);
@@ -487,25 +535,34 @@ number_token(Parser *p)
                     p->arena);
 }
 
-PyObject *
-run_parser(struct tok_state *tok, void *(start_rule_func)(Parser *), int mode, int input_mode,
-           KeywordToken **keywords, int n_keyword_lists)
+void
+Parser_Free(Parser *p)
 {
-    PyObject *result = NULL;
+    for (int i = 0; i < p->size; i++) {
+        PyMem_Free(p->tokens[i]);
+    }
+    PyMem_Free(p->tokens);
+    PyMem_Free(p);
+}
+
+Parser *
+Parser_New(struct tok_state *tok, START_RULE start_rule_func, int input_mode,
+           PyArena *arena)
+{
     Parser *p = PyMem_Malloc(sizeof(Parser));
     if (p == NULL) {
         PyErr_Format(PyExc_MemoryError, "Out of memory for Parser");
-        goto exit;
+        return NULL;
     }
     assert(tok != NULL);
     p->tok = tok;
     p->input_mode = input_mode;
-    p->keywords = keywords;
-    p->n_keyword_lists = n_keyword_lists;
+    p->keywords = NULL;
+    p->n_keyword_lists = -1;
     p->tokens = PyMem_Malloc(sizeof(Token *));
     if (!p->tokens) {
         PyErr_Format(PyExc_MemoryError, "Out of memory for tokens");
-        goto exit;
+        return NULL;
     }
     p->tokens[0] = PyMem_Malloc(sizeof(Token));
     memset(p->tokens[0], '\0', sizeof(Token));
@@ -513,28 +570,24 @@ run_parser(struct tok_state *tok, void *(start_rule_func)(Parser *), int mode, i
     p->fill = 0;
     p->size = 1;
 
-    p->arena = PyArena_New();
-    if (!p->arena) {
-        goto exit;
-    }
-
-    if (fill_token(p) < 0) {
-        goto exit;
-    }
-
-    PyErr_Clear();
-
+    p->arena = arena;
     p->start_rule_func = start_rule_func;
 
+    return p;
+}
+
+mod_ty
+run_parser(Parser *p)
+{
     int error = setjmp(p->error_env);
     if (error) {
-        goto exit;
+        return NULL;
     }
-    void *res = (*start_rule_func)(p);
 
+    mod_ty res = parse(p);
     if (res == NULL) {
         if (PyErr_Occurred()) {
-            goto exit;
+            return NULL;
         }
         if (p->fill == 0) {
             raise_syntax_error(p, "error at start before reading any input");
@@ -542,35 +595,15 @@ run_parser(struct tok_state *tok, void *(start_rule_func)(Parser *), int mode, i
         else {
             raise_syntax_error(p, "invalid syntax");
         }
-        goto exit;
+        return NULL;
     }
 
-    if (mode == 2) {
-        result = (PyObject *)PyAST_CompileObject(res, tok->filename, NULL, -1, p->arena);
-    }
-    else if (mode == 1) {
-        result = PyAST_mod2obj(res);
-    }
-    else {
-        result = Py_None;
-        Py_INCREF(result);
-    }
-
-exit:
-    for (int i = 0; i < p->size; i++) {
-        PyMem_Free(p->tokens[i]);
-    }
-    PyMem_Free(p->tokens);
-    if (p->arena != NULL) {
-        PyArena_Free(p->arena);
-    }
-    PyMem_Free(p);
-    return result;
+    return res;
 }
 
-PyObject *
-run_parser_from_file(const char *filename, void *(start_rule_func)(Parser *), int mode,
-                     KeywordToken **keywords, int n_keyword_lists)
+mod_ty
+run_parser_from_file(const char *filename, START_RULE start_rule_func,
+                     PyObject *filename_ob, PyArena *arena)
 {
     FILE *fp = fopen(filename, "rb");
     if (fp == NULL) {
@@ -578,50 +611,57 @@ run_parser_from_file(const char *filename, void *(start_rule_func)(Parser *), in
         return NULL;
     }
 
-    PyObject *filename_ob = NULL;
-    if ((filename_ob = PyUnicode_FromString(filename)) == NULL) {
-        return NULL;
-    }
-
     // From here on we need to clean up even if there's an error
-    PyObject *result = NULL;
+    mod_ty result = NULL;
 
     struct tok_state *tok = PyTokenizer_FromFile(fp, NULL, NULL, NULL);
     if (tok == NULL) {
         goto error;
     }
-
-    // Transfers ownership
+    // This transfers the ownership to the tokenizer
     tok->filename = filename_ob;
-    filename_ob = NULL;
+    Py_INCREF(filename_ob);
 
-    result = run_parser(tok, start_rule_func, mode, FILE_INPUT, keywords, n_keyword_lists);
+    Parser *p = Parser_New(tok, start_rule_func, FILE_INPUT, arena);
+    if (p == NULL) {
+        goto after_tok_error;
+    }
 
+    result = run_parser(p);
+    Parser_Free(p);
+
+after_tok_error:
     PyTokenizer_Free(tok);
-
 error:
     fclose(fp);
-    Py_XDECREF(filename_ob);
     return result;
 }
 
-PyObject *
-run_parser_from_string(const char *str, void *(start_rule_func)(Parser *), int mode,
-                       KeywordToken **keywords, int n_keyword_lists)
+mod_ty
+run_parser_from_string(const char *str, START_RULE start_rule_func, PyObject *filename_ob,
+                       PyArena *arena)
 {
-    PyObject *result = NULL;
     struct tok_state *tok = PyTokenizer_FromString(str, 1);
     if (tok == NULL) {
         return NULL;
     }
+    // This transfers the ownership to the tokenizer
+    tok->filename = filename_ob;
+    Py_INCREF(filename_ob);
 
-    tok->filename = PyUnicode_FromString("<string>");
-    if (tok->filename == NULL) {
-        PyTokenizer_Free(tok);
-        return NULL;
+    // We need to clear up from here on
+    mod_ty result = NULL;
+
+    Parser *p = Parser_New(tok, start_rule_func, STRING_INPUT, arena);
+    if (p == NULL) {
+        goto error;
     }
 
-    result = run_parser(tok, start_rule_func, mode, STRING_INPUT, keywords, n_keyword_lists);
+    result = run_parser(p);
+    Parser_Free(p);
+
+error:
+    PyTokenizer_Free(tok);
     return result;
 }
 
