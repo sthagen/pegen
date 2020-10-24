@@ -15,7 +15,8 @@ from pegen import build
 from scripts import test_parse_directory
 
 argparser = argparse.ArgumentParser(
-    prog="test_pypi_packages", description="Helper program to test parsing PyPI packages",
+    prog="test_pypi_packages",
+    description="Helper program to test parsing PyPI packages",
 )
 argparser.add_argument(
     "-t", "--tree", action="count", help="Compare parse tree to official AST", default=0
@@ -53,7 +54,7 @@ def find_dirname(package_name: str) -> str:
 def run_tests(dirname: str, tree: int, extension: Any) -> int:
     return test_parse_directory.parse_directory(
         dirname,
-        "data/simpy.gram",
+        "data/python.gram",
         verbose=False,
         excluded_files=[
             "*/failset/*",
@@ -75,8 +76,8 @@ def main() -> None:
     args = argparser.parse_args()
     tree = args.tree
 
-    extension = build.build_parser_and_generator(
-        "data/simpy.gram", "pegen/parse.c", compile_extension=True
+    extension = build.build_c_parser_and_generator(
+        "data/python.gram", "data/Tokens", "pegen/parse.c", compile_extension=True
     )
     for package in get_packages():
         print(f"Extracting files from {package}... ", end="")

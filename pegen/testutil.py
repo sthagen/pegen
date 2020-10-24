@@ -5,8 +5,9 @@ import pathlib
 import sys
 import textwrap
 import tokenize
+import token
 
-from typing import Any, cast, Dict, IO, Type, Final
+from typing import Any, cast, Dict, Final, IO, List, Optional, Tuple, Type
 
 from pegen.build import compile_c_extension
 from pegen.c_generator import CParserGenerator
@@ -14,7 +15,15 @@ from pegen.grammar import Grammar
 from pegen.grammar_parser import GeneratedParser as GrammarParser
 from pegen.parser import Parser
 from pegen.python_generator import PythonParserGenerator
-from pegen.tokenizer import Tokenizer
+from pegen.tokenizer import Mark, Tokenizer
+
+from data.python_parser import GeneratedParser  # type: ignore[import]
+
+ALL_TOKENS = token.tok_name
+EXACT_TOKENS = token.EXACT_TOKEN_TYPES
+NON_EXACT_TOKENS = {
+    name for index, name in token.tok_name.items() if index not in EXACT_TOKENS.values()
+}
 
 
 def generate_parser(grammar: Grammar) -> Type[Parser]:
@@ -70,7 +79,7 @@ def import_file(full_name: str, path: str) -> Any:
 
 def generate_c_parser_source(grammar: Grammar) -> str:
     out = io.StringIO()
-    genr = CParserGenerator(grammar, out)
+    genr = CParserGenerator(grammar, ALL_TOKENS, EXACT_TOKENS, NON_EXACT_TOKENS, out)
     genr.generate("<string>")
     return out.getvalue()
 
@@ -89,8 +98,10 @@ def generate_parser_c_extension(
     # context.
     assert not os.listdir(path)
     source = path / "parse.c"
-    with open(source, "w") as file:
-        genr = CParserGenerator(grammar, file, debug=debug)
+    with open(source, "w", encoding="utf-8") as file:
+        genr = CParserGenerator(
+            grammar, ALL_TOKENS, EXACT_TOKENS, NON_EXACT_TOKENS, file, debug=debug
+        )
         genr.generate("parse.c")
     extension_path = compile_c_extension(str(source), build_dir=str(path / "build"))
     extension = import_file("parse", extension_path)
@@ -124,3 +135,126 @@ def print_memstats() -> bool:
     for key, value in res.items():
         print(f"  {key:12.12s}: {value:10.0f} MiB")
     return True
+
+
+def describe_token(tok: tokenize.TokenInfo, parser: Parser) -> str:
+    if tok.type == token.ERRORTOKEN:
+        return repr(tok.string)
+    if tok.type == token.OP:
+        return repr(tok.string)
+    if tok.type == token.AWAIT:
+        return "'await'"
+    if tok.type == token.ASYNC:
+        return "'async'"
+    if tok.string in parser._keywords:
+        return repr(tok.string)
+    return token.tok_name[tok.type]
+
+
+def recovery_by_insertions(
+    parser: Parser, limit: int = 100
+) -> Tuple[
+    tokenize.TokenInfo, Mark, List[tokenize.TokenInfo], Dict[Mark, List[tokenize.TokenInfo]]
+]:
+    tokenizer = parser._tokenizer
+    howfar: Dict[Mark, List[tokenize.TokenInfo]] = {}
+    initial_reach = parser.get_reach()
+    pos = initial_reach - 1
+    got = tokenizer._tokens[pos]
+    for i in range(limit):
+        parser.reset(0)
+        save_reach = parser.reset_reach(0)
+        parser.clear_excess(pos)
+        parser.insert_dummy(pos, i)
+        tree = parser.start()
+        tok = parser.remove_dummy()
+        if tok is None:
+            ## print(f"Break after {i+1} iterations")
+            break
+        reach = parser.reset_reach(save_reach)
+        if tree is not None or reach > pos:
+            howfar.setdefault(reach, []).append(tok)
+    else:
+        ## print(f"Stopped after trying {limit} times")
+        pass
+    if howfar:
+        # Only report those tokens that got the farthest
+        reach = max(howfar)
+        expected = sorted(howfar[reach])
+    else:
+        reach = pos
+        expected = []
+    return (got, reach, expected, howfar)
+
+
+def recovery_by_deletions(
+    parser: Parser, limit: int = 2
+) -> List[Tuple[tokenize.TokenInfo, int, Mark, Mark]]:
+    tokenizer = parser._tokenizer
+    # TODO: Don't use len() here, but somehow use get_reach.
+    orig_reach = parser.get_reach()
+    orig_pos = orig_reach - 1
+    results = []
+    for i in range(limit):
+        pos = orig_pos - i
+        if pos < 0:
+            break
+        if parser._tokenizer._tokens[pos].type in (token.ENDMARKER, token.ERRORTOKEN):
+            continue
+        parser.reset(0)
+        parser.reset_reach(0)
+        parser.clear_excess(pos)
+        tok = parser.delete_token(pos)
+        tree = parser.start()
+        parser.insert_token(pos, tok)
+        reach = parser.reset_reach(orig_reach)
+        parser.reset(orig_pos)
+        if reach > orig_reach:
+            results.append((tok, i, pos, reach))
+    return results
+
+
+def make_improved_syntax_error(
+    parser: Parser, filename: str = "<unknown>", *, limit: int = 100
+) -> SyntaxError:
+    err = parser.make_syntax_error(filename)
+
+    if not isinstance(err, SyntaxError):
+        return err
+
+    got, reach, expected, howfar = recovery_by_insertions(parser, limit=limit)
+
+    if got.type == token.INDENT and len(expected) > 10:  # 10 is pretty arbitrary
+        return IndentationError("unexpected indent", *err.args[1:])
+    if len(expected) == 1 and expected[0].type == token.INDENT:
+        return IndentationError("expected an indented block", *err.args[1:])
+
+    deletions = recovery_by_deletions(parser, limit=1)
+    if deletions:
+        d_tok, d_index, d_pos, d_reach = deletions[0]
+        if d_reach >= reach:
+            return err.__class__(
+                f"invalid syntax (unexpected token {describe_token(d_tok, parser)})"
+            )
+
+    if isinstance(err, SyntaxError) and err.msg == "pegen parse failure":
+        expected_strings = ", ".join([describe_token(tok, parser) for tok in expected])
+        return err.__class__(f"invalid syntax (expected one of {expected_strings})", *err.args[1:])
+
+    return err
+
+
+def try_our_parser(source: str) -> Tuple[Optional[Exception], Parser]:
+    file = io.StringIO(source)
+    tokengen = tokenize.generate_tokens(file.readline)
+    tokenizer = Tokenizer(tokengen)
+    parser = GeneratedParser(tokenizer)
+    try:
+        tree = parser.start()
+    except Exception as err:
+        return err, parser
+    if tree:
+        ## import pprint; pprint.pprint(tree)
+        return None, parser
+    else:
+        return make_improved_syntax_error(parser, "<string>"), parser

@@ -13,7 +13,7 @@ from pathlib import PurePath
 from typing import List, Optional, Any
 
 sys.path.insert(0, os.getcwd())
-from pegen.build import build_parser_and_generator
+from pegen.build import build_c_parser_and_generator
 from pegen.testutil import print_memstats
 from scripts import show_parse
 
@@ -37,7 +37,9 @@ argparser.add_argument(
     "-v", "--verbose", action="store_true", help="Display detailed errors for failures"
 )
 argparser.add_argument(
-    "--skip-actions", action="store_true", help="Suppress code emission for rule actions",
+    "--skip-actions",
+    action="store_true",
+    help="Suppress code emission for rule actions",
 )
 argparser.add_argument(
     "-t", "--tree", action="count", help="Compare parse tree to official AST", default=0
@@ -79,7 +81,10 @@ def report_status(
 
 
 def compare_trees(
-    actual_tree: ast.AST, file: str, verbose: bool, include_attributes: bool = False,
+    actual_tree: ast.AST,
+    file: str,
+    verbose: bool,
+    include_attributes: bool = False,
 ) -> int:
     with open(file) as f:
         expected_tree = ast.parse(f.read())
@@ -132,9 +137,10 @@ def parse_directory(
 
         try:
             if not extension:
-                build_parser_and_generator(
+                build_c_parser_and_generator(
                     grammar_file,
-                    "peg_parser/parse.c",
+                    "data/Tokens",  # TODO: Don't hardcode this
+                    "peg_extension/parse.c",
                     compile_extension=True,
                     skip_actions=skip_actions,
                 )
@@ -151,7 +157,7 @@ def parse_directory(
         print("A grammar file was not provided - attempting to use existing file...\n")
 
     try:
-        from peg_parser import parse  # type: ignore
+        from peg_extension import parse  # type: ignore
     except:
         print(
             "An existing parser was not found. Please run `make` or specify a grammar file with the `-g` flag.",

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3.8
 
 import argparse
-import collections
 import pprint
 import sys
-from typing import Optional, Set, Dict
+from typing import Set, Dict
 
 from pegen.build import build_parser
 from pegen.grammar import (
@@ -30,7 +29,8 @@ from pegen.grammar import (
 )
 
 argparser = argparse.ArgumentParser(
-    prog="calculate_first_sets", description="Calculate the first sets of a grammar",
+    prog="calculate_first_sets",
+    description="Calculate the first sets of a grammar",
 )
 argparser.add_argument("grammar_file", help="The grammar file")
 

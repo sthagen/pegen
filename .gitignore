@@ -1,6 +1,6 @@
-peg_parser/*.o
-peg_parser/*.so
-peg_parser/parse
+peg_extension/*.o
+peg_extension/*.so
+peg_extension/parse.c
 parse.py
 
 data/pypi/
@@ -11,5 +11,7 @@ data/pypi/
 .mypy_cache
 .pytest_cache
 .envrc
+.vscode
 requirements-local.*
 cpython
+dset.db

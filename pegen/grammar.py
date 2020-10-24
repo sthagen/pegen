@@ -4,7 +4,6 @@ from abc import abstractmethod
 from typing import (
     AbstractSet,
     Any,
-    Callable,
     Dict,
     Iterable,
     Iterator,
@@ -13,11 +12,9 @@ from typing import (
     Set,
     Tuple,
     TYPE_CHECKING,
-    TypeVar,
     Union,
 )
 
-from pegen.parser import memoize, Parser
 
 if TYPE_CHECKING:
     from pegen.parser_generator import ParserGenerator
@@ -80,6 +77,7 @@ class Rule:
         self.nullable = False
         self.left_recursive = False
         self.leader = False
+        rhs.set_rule_name(name)
 
     def is_loop(self) -> bool:
         return self.name.startswith("_loop")
@@ -201,6 +199,10 @@ class Rhs:
     def __iter__(self) -> Iterator[List[Alt]]:
         yield self.alts
 
+    def set_rule_name(self, name: str) -> None:
+        for i, alt in enumerate(self.alts):
+            alt.set_rule_name_and_index(name, i)
+
     def nullable_visit(self, rules: Dict[str, Rule]) -> bool:
         for alt in self.alts:
             if alt.nullable_visit(rules):
@@ -242,6 +244,10 @@ class Alt:
     def __iter__(self) -> Iterator[List[NamedItem]]:
         yield self.items
 
+    def set_rule_name_and_index(self, name: str, index: int) -> None:
+        self.rule_name = name
+        self.alt_index = index
+
     def nullable_visit(self, rules: Dict[str, Rule]) -> bool:
         for item in self.items:
             if not item.nullable_visit(rules):
@@ -262,9 +268,10 @@ class Alt:
 
 
 class NamedItem:
-    def __init__(self, name: Optional[str], item: Item):
+    def __init__(self, name: Optional[str], item: Item, type: Optional[str] = None):
         self.name = name
         self.item = item
+        self.type = type
         self.nullable = False
 
     def __str__(self) -> str:
